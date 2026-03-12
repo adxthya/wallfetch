@@ -20,6 +20,13 @@ interface RepoOwner {
   avatar_url: string;
 }
 
+interface RepoDetails {
+  owner: string;
+  repo: string;
+  branch?: string;
+  folderPath?: string;
+}
+
 export default function Home() {
   const [images, setImages] = useState<string[]>([]);
   const [link, setLink] = useState("");
@@ -28,13 +35,19 @@ export default function Home() {
   const [repoOwner, setRepoOwner] = useState<RepoOwner | null>(null);
   const [repoName, setRepoName] = useState("");
 
-  const extractRepoDetails = (url: string) => {
+  const extractRepoDetails = (url: string): RepoDetails | null => {
     const match = url.match(
-      /github\.com\/([^\/]+)\/([^\/]+)\/tree\/[^\/]+\/(.+)/
+      /github\.com\/([^\/]+)\/([^\/]+)(?:\/tree\/([^\/]+)\/?(.*))?/,
     );
-    return match
-      ? { owner: match[1], repo: match[2], folderPath: match[3] }
-      : null;
+
+    if (!match) return null;
+
+    return {
+      owner: match[1],
+      repo: match[2],
+      branch: match[3],
+      folderPath: match[4] || "",
+    };
   };
 
   const fetchImages = async () => {
@@ -45,37 +58,46 @@ export default function Home() {
     setLoading(true);
 
     const repoDetails = extractRepoDetails(link);
+
     if (!repoDetails) {
-      setError("Invalid GitHub folder URL.");
+      setError("Invalid GitHub repository URL.");
       setLoading(false);
       return;
     }
 
-    const { owner, repo, folderPath } = repoDetails;
+    const { owner, repo, branch: branchFromUrl, folderPath } = repoDetails;
     setRepoName(repo);
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${folderPath}`;
-    const ownerApiUrl = `https://api.github.com/repos/${owner}/${repo}`;
+
+    const repoApiUrl = `https://api.github.com/repos/${owner}/${repo}`;
 
     try {
-      const ownerResponse = await fetch(ownerApiUrl);
-      if (!ownerResponse.ok)
+      const repoResponse = await fetch(repoApiUrl);
+
+      if (!repoResponse.ok)
         throw new Error("Failed to fetch repository details");
 
-      const ownerData = await ownerResponse.json();
+      const repoData = await repoResponse.json();
+
+      const defaultBranch = repoData.default_branch;
+      const branch = branchFromUrl || defaultBranch;
+
       setRepoOwner({
-        login: ownerData.owner.login,
-        avatar_url: ownerData.owner.avatar_url,
+        login: repoData.owner.login,
+        avatar_url: repoData.owner.avatar_url,
       });
 
-      const response = await fetch(apiUrl);
-      if (!response.ok) throw new Error("Failed to fetch folder contents");
+      const contentsUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${folderPath}?ref=${branch}`;
+
+      const response = await fetch(contentsUrl);
+
+      if (!response.ok) throw new Error("Failed to fetch repository contents");
 
       const data: GitHubFile[] = await response.json();
 
       const imageFiles = data
         .filter(
           (file) =>
-            file.type === "file" && /\.(png|jpe?g|gif|webp)$/i.test(file.name)
+            file.type === "file" && /\.(png|jpe?g|gif|webp)$/i.test(file.name),
         )
         .map((file) => file.download_url);
 
@@ -90,25 +112,30 @@ export default function Home() {
     }
   };
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    fetchImages();
+  };
+
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center p-10">
       <div className="max-w-2xl w-full">
         <h1 className="text-3xl font-bold text-center mb-6">WallFetch</h1>
-        <div className="flex gap-2">
+
+        <form onSubmit={handleSubmit} className="flex gap-2">
           <Input
             type="text"
-            placeholder="Enter GitHub folder URL..."
+            placeholder="Enter GitHub repo or folder URL..."
             value={link}
             onChange={(e) => setLink(e.target.value)}
             className="bg-gray-800 border-gray-700 text-white h-10"
           />
-          <Button
-            onClick={fetchImages}
-            disabled={loading}
-          >
+
+          <Button type="submit" disabled={loading}>
             {loading ? "Fetching..." : "Fetch"}
           </Button>
-        </div>
+        </form>
+
         {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
       </div>
 
@@ -121,6 +148,7 @@ export default function Home() {
             height={50}
             className="rounded-full"
           />
+
           <div>
             <p className="text-lg font-semibold">{repoOwner.login}</p>
             <p className="text-sm text-gray-400">{repoName}</p>
@@ -138,11 +166,7 @@ export default function Home() {
           >
             <Card className="bg-gray-800 border-gray-700 shadow-md">
               <CardContent className="p-2">
-                <Link
-                  href={src}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
+                <Link href={src} target="_blank" rel="noopener noreferrer">
                   <Image
                     src={src}
                     alt={`Image ${index}`}
